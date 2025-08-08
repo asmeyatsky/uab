@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UAB - Test Page</title>
+    <style>
+        body { 
+            font-family: monospace; 
+            padding: 20px; 
+            background: #f5f5f5; 
+        }
+        .test-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-result {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .pass { background: #d4edda; color: #155724; }
+        .fail { background: #f8d7da; color: #721c24; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        .button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .button:hover { background: #0056b3; }
+        #results { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>Universal Agent Builder - Test Suite</h1>
+        <p>This page provides basic testing for the UAB application functionality.</p>
+        
+        <div>
+            <button class="button" onclick="runSmokeTest()">Quick Smoke Test</button>
+            <button class="button" onclick="runFullTests()">Full Test Suite</button>
+            <button class="button" onclick="runManualTests()">Manual Test Guide</button>
+            <button class="button" onclick="clearResults()">Clear Results</button>
+        </div>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const resultsDiv = document.getElementById('results');
+        
+        function addResult(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `test-result ${type}`;
+            div.textContent = message;
+            resultsDiv.appendChild(div);
+        }
+        
+        function clearResults() {
+            resultsDiv.innerHTML = '';
+        }
+        
+        function runSmokeTest() {
+            addResult('=== Smoke Test Results ===', 'info');
+            
+            // Test if we can access the main app
+            try {
+                const mainAppFrame = document.createElement('iframe');
+                mainAppFrame.src = './index.html';
+                mainAppFrame.style.display = 'none';
+                document.body.appendChild(mainAppFrame);
+                
+                mainAppFrame.onload = () => {
+                    try {
+                        const appDoc = mainAppFrame.contentDocument;
+                        const promptInput = appDoc.getElementById('promptInput');
+                        const frameworkCards = appDoc.querySelectorAll('.framework-card');
+                        const generateBtn = appDoc.getElementById('generateAgent');
+                        
+                        addResult(promptInput ? '✓ Prompt input found' : '✗ Prompt input missing', 
+                                promptInput ? 'pass' : 'fail');
+                        addResult(frameworkCards.length === 3 ? '✓ All framework cards found' : `✗ Found ${frameworkCards.length} framework cards`, 
+                                frameworkCards.length === 3 ? 'pass' : 'fail');
+                        addResult(generateBtn ? '✓ Generate button found' : '✗ Generate button missing', 
+                                generateBtn ? 'pass' : 'fail');
+                        
+                        // Test basic functionality
+                        if (promptInput) {
+                            promptInput.value = 'Test prompt';
+                            addResult('✓ Can set prompt value', 'pass');
+                        }
+                        
+                        addResult('=== Smoke Test Complete ===', 'info');
+                        
+                    } catch (error) {
+                        addResult('✗ Error accessing app content: ' + error.message, 'fail');
+                    } finally {
+                        document.body.removeChild(mainAppFrame);
+                    }
+                };
+                
+            } catch (error) {
+                addResult('✗ Failed to load main app: ' + error.message, 'fail');
+            }
+        }
+        
+        function runFullTests() {
+            addResult('=== Full Test Suite ===', 'info');
+            addResult('Loading main application for testing...', 'info');
+            
+            // Create iframe to load main app
+            const testFrame = document.createElement('iframe');
+            testFrame.src = './index.html';
+            testFrame.style.width = '1px';
+            testFrame.style.height = '1px';
+            testFrame.style.opacity = '0';
+            testFrame.style.position = 'absolute';
+            testFrame.style.top = '-1000px';
+            document.body.appendChild(testFrame);
+            
+            testFrame.onload = () => {
+                const appWindow = testFrame.contentWindow;
+                
+                // Wait for app to initialize
+                setTimeout(() => {
+                    try {
+                        // Check if our test runner is available
+                        if (appWindow.UABTestRunner) {
+                            const testRunner = new appWindow.UABTestRunner();
+                            testRunner.runTests().then(results => {
+                                addResult(`Total Tests: ${results.total}`, 'info');
+                                addResult(`Passed: ${results.passed}`, 'pass');
+                                addResult(`Failed: ${results.failed}`, results.failed > 0 ? 'fail' : 'pass');
+                                
+                                results.results.forEach(result => {
+                                    addResult(`${result.result === 'PASS' ? '✓' : '✗'} ${result.test}`, 
+                                            result.result === 'PASS' ? 'pass' : 'fail');
+                                });
+                                
+                                document.body.removeChild(testFrame);
+                            });
+                        } else {
+                            // Run basic tests without test runner
+                            const appDoc = testFrame.contentDocument;
+                            const appState = appWindow.appState;
+                            
+                            addResult(appState ? '✓ App state accessible' : '✗ App state not found', 
+                                    appState ? 'pass' : 'fail');
+                            
+                            if (appState) {
+                                addResult(`✓ Initial frameworks: ${appState.selectedFrameworks.size}`, 'pass');
+                                addResult(`✓ Initial prompt: "${appState.prompt}"`, 'info');
+                            }
+                            
+                            document.body.removeChild(testFrame);
+                        }
+                    } catch (error) {
+                        addResult('✗ Error running tests: ' + error.message, 'fail');
+                        document.body.removeChild(testFrame);
+                    }
+                }, 2000); // Wait 2 seconds for app initialization
+            };
+        }
+        
+        function runManualTests() {
+            addResult('=== Manual Testing Guide ===', 'info');
+            addResult('Open the main application (index.html) and follow these steps:', 'info');
+            addResult('', 'info');
+            addResult('1. Test Framework Selection:', 'info');
+            addResult('   • Click A2A framework card - should highlight and check box', 'info');
+            addResult('   • Click checkbox directly - should toggle selection', 'info');
+            addResult('   • Verify configuration panel shows A2A settings when selected', 'info');
+            addResult('', 'info');
+            addResult('2. Test Templates:', 'info');
+            addResult('   • Click "Customer Service Agent" template', 'info');
+            addResult('   • Verify prompt fills and A2A+MCP frameworks select', 'info');
+            addResult('   • Modify prompt - template selection should clear', 'info');
+            addResult('', 'info');
+            addResult('3. Test Auto-Selection:', 'info');
+            addResult('   • Clear prompt and frameworks', 'info');
+            addResult('   • Type "agent-to-agent collaboration" - A2A should auto-select', 'info');
+            addResult('   • Type "external tools and data" - MCP should auto-select', 'info');
+            addResult('', 'info');
+            addResult('4. Test Complete Workflow:', 'info');
+            addResult('   • Enter custom prompt', 'info');
+            addResult('   • Select frameworks', 'info');
+            addResult('   • Configure framework settings', 'info');
+            addResult('   • Generate agent', 'info');
+            addResult('   • Test in Test Agent tab', 'info');
+            addResult('', 'info');
+            addResult('5. Test Error Cases:', 'info');
+            addResult('   • Try generating with no prompt - should show error', 'info');
+            addResult('   • Try generating with no frameworks - should show error', 'info');
+            addResult('   • Verify error messages are clear and helpful', 'info');
+            addResult('', 'info');
+            addResult('6. Test Persistence:', 'info');
+            addResult('   • Make selections and refresh page', 'info');
+            addResult('   • Verify all choices are restored', 'info');
+            addResult('', 'info');
+            addResult('=== End Manual Testing Guide ===', 'info');
+        }
+    </script>
+</body>
+</html>
