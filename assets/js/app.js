@@ -1,12 +1,12 @@
+// Import dependency injection container
+import { container } from './infrastructure/config/DependencyInjection.js';
 
-// Application state
+// Application state (now uses domain entities)
 const appState = {
-  prompt: '',
-  selectedFrameworks: new Set(),
+  currentAgent: null, // Will hold an Agent entity
   selectedTemplate: null,
-  configuration: {},
-  generatedAgent: null,
-  deploymentConfig: {}
+  deploymentConfig: {},
+  agentsList: [] // List of all agents
 };
 
 // Application data
@@ -86,73 +86,15 @@ class Logger {
   }
 }
 
-// Add local storage for persistence
-class StorageManager {
-  static save(key, data) {
-    try {
-      // Handle Set serialization
-      const replacer = (key, value) => {
-        if (value instanceof Set) {
-          return { dataType: 'Set', value: [...value] };
-        }
-        return value;
-      };
-      localStorage.setItem(key, JSON.stringify(data, replacer));
-      return true;
-    } catch (error) {
-      Logger.error('Failed to save to localStorage', error);
-      return false;
-    }
-  }
-
-  static load(key) {
-    try {
-      const reviver = (key, value) => {
-        if (typeof value === 'object' && value !== null) {
-          if (value.dataType === 'Set') {
-            return new Set(value.value);
-          }
-        }
-        return value;
-      };
-      const data = localStorage.getItem(key);
-      return data ? JSON.parse(data, reviver) : null;
-    } catch (error) {
-      Logger.error('Failed to load from localStorage', error);
-      return null;
-    }
-  }
-}
-
-// Auto-save functionality
-function autoSaveState() {
-  StorageManager.save('agentBuilderState', appState);
-}
-
-// Load previous state on initialization
-function loadSavedState() {
-  const savedState = StorageManager.load('agentBuilderState');
-  if (savedState) {
-    Object.assign(appState, savedState);
-  }
-}
-
-
 // Initialize the application
 document.addEventListener('DOMContentLoaded', function() {
   initializeApp();
 });
 
 function initializeApp() {
-  loadSavedState();
   renderTemplates();
   renderFrameworkInfo();
   setupEventListeners();
-  updateCharCount();
-  syncCheckboxesWithState();
-  updateFrameworkCards();
-  updateConfiguration();
-  generatePreview();
   
   // Ensure main content is visible
   const mainContent = document.querySelector('.main-content');
@@ -160,20 +102,6 @@ function initializeApp() {
     mainContent.style.opacity = '1';
     mainContent.style.visibility = 'visible';
   }
-}
-
-function syncCheckboxesWithState() {
-  // Update prompt input
-  const promptInput = document.getElementById('promptInput');
-  if (promptInput) {
-    promptInput.value = appState.prompt || '';
-  }
-  
-  // Update framework checkboxes
-  document.querySelectorAll('.framework-checkbox').forEach(checkbox => {
-    const framework = checkbox.id.toUpperCase();
-    checkbox.checked = appState.selectedFrameworks.has(framework);
-  });
 }
 
 function renderTemplates() {
@@ -218,10 +146,15 @@ function renderFrameworkInfo() {
 function setupEventListeners() {
   // Prompt input
   const promptInput = document.getElementById('promptInput');
-  promptInput.addEventListener('input', handlePromptChange);
+  if (promptInput) {
+    promptInput.addEventListener('input', handlePromptChange);
+  }
   
   // Clear prompt button
-  document.getElementById('clearPrompt').addEventListener('click', clearPrompt);
+  const clearPromptBtn = document.getElementById('clearPrompt');
+  if (clearPromptBtn) {
+    clearPromptBtn.addEventListener('click', clearPrompt);
+  }
   
   // Framework checkboxes
   document.querySelectorAll('.framework-checkbox').forEach(checkbox => {
@@ -288,8 +221,33 @@ function setupEventListeners() {
   });
   
   // Generate and export buttons
-  document.getElementById('generateAgent').addEventListener('click', generateAgent);
-  document.getElementById('exportConfig').addEventListener('click', exportConfiguration);
+  const generateAgentBtn = document.getElementById('generateAgent');
+  const exportConfigBtn = document.getElementById('exportConfig');
+  
+  if (generateAgentBtn) {
+    generateAgentBtn.addEventListener('click', generateAgent);
+  }
+  
+  if (exportConfigBtn) {
+    exportConfigBtn.addEventListener('click', exportConfiguration);
+  }
+  
+  // Add orchestration-related event listeners if elements exist
+  const planAgentBtn = document.getElementById('planAgent');
+  if (planAgentBtn) {
+    planAgentBtn.addEventListener('click', planAgent);
+  }
+  
+  // Add event listener for evaluation button (using class selector since no ID)
+  document.querySelectorAll('.capability-card button').forEach(button => {
+    if (button.textContent.trim() === 'Evaluate') {
+      button.addEventListener('click', evaluateAgentForGoal);
+    } else if (button.textContent.trim() === 'Configure' && button.closest('.capability-card').querySelector('h4').textContent.trim() === 'Multi-Agent Coordination') {
+      button.addEventListener('click', configureMultiAgentCoordination);
+    } else if (button.textContent.trim() === 'Configure' && button.closest('.capability-card').querySelector('h4').textContent.trim() === 'AP2 Payment Integration') {
+      button.addEventListener('click', configureAP2Payment);
+    }
+  });
   
   // Modal controls
   document.getElementById('closeModal').addEventListener('click', closeModal);
@@ -307,78 +265,52 @@ function selectTemplate(template) {
   
   // Update state
   appState.selectedTemplate = template;
-  appState.prompt = template.prompt;
   
-  // Update prompt input
-  document.getElementById('promptInput').value = template.prompt;
+  // Create agent from template using domain service
+  const agentDomainService = container.getAgentDomainService();
+  const newAgent = agentDomainService.createAgentFromTemplate(template);
+  appState.currentAgent = newAgent;
+  
+  // Update UI with agent details
+  const promptInput = document.getElementById('promptInput');
+  if (promptInput) {
+    promptInput.value = appState.currentAgent.prompt.value;
+  }
+  
   updateCharCount();
-  
-  // Select recommended frameworks
-  document.querySelectorAll('.framework-checkbox').forEach(checkbox => {
-    const framework = checkbox.id.toUpperCase();
-    const shouldCheck = template.frameworks.includes(framework);
-    checkbox.checked = shouldCheck;
-    
-    if (shouldCheck) {
-      appState.selectedFrameworks.add(framework);
-    } else {
-      appState.selectedFrameworks.delete(framework);
-    }
-  });
-  
   updateFrameworkCards();
   updateConfiguration();
   generatePreview();
-  autoSaveState();
 }
 
-function handlePromptChange(e) {
-  appState.prompt = e.target.value;
+async function handlePromptChange(e) {
+  const newPrompt = e.target.value;
+  
+  // If we have a current agent, update its prompt
+  if (appState.currentAgent) {
+    const { AgentPrompt } = await import('./domain/value_objects/AgentPrompt.js');
+    const agentPrompt = new AgentPrompt(newPrompt);
+    appState.currentAgent = appState.currentAgent.updatePrompt(agentPrompt);
+  }
+  
   updateCharCount();
-  autoSelectFrameworks();
   generatePreview();
   
   // Clear template selection if prompt is manually changed
-  if (appState.selectedTemplate && appState.prompt !== appState.selectedTemplate.prompt) {
+  if (appState.selectedTemplate && newPrompt !== appState.selectedTemplate.prompt) {
     appState.selectedTemplate = null;
     document.querySelectorAll('.template-card').forEach(card => {
       card.classList.remove('active');
     });
   }
-  autoSaveState();
-}
-
-function autoSelectFrameworks() {
-  const prompt = appState.prompt.toLowerCase();
-  const selectedFrameworks = new Set();
-
-  if (prompt.includes('agent-to-agent') || prompt.includes('a2a') || prompt.includes('collaboration') || prompt.includes('multi-agent')) {
-    selectedFrameworks.add('A2A');
-  }
-
-  if (prompt.includes('development kit') || prompt.includes('adk') || prompt.includes('workflow')) {
-    selectedFrameworks.add('ADK');
-  }
-
-  if (prompt.includes('model context') || prompt.includes('mcp') || prompt.includes('external tools') || prompt.includes('data sources')) {
-    selectedFrameworks.add('MCP');
-  }
-
-  appState.selectedFrameworks = selectedFrameworks;
-  
-  // Update checkboxes to match selected frameworks
-  document.querySelectorAll('.framework-checkbox').forEach(checkbox => {
-    const framework = checkbox.id.toUpperCase();
-    checkbox.checked = selectedFrameworks.has(framework);
-  });
-  
-  updateFrameworkCards();
-  updateConfiguration();
 }
 
 function updateCharCount() {
   const charCount = document.getElementById('charCount');
-  const count = appState.prompt.length;
+  if (!charCount) return;
+  
+  const prompt = appState.currentAgent?.prompt?.value || '';
+  const count = prompt.length;
   charCount.textContent = `${count} characters`;
   
   if (count < 50) {
@@ -391,36 +323,74 @@ function updateCharCount() {
 }
 
 function clearPrompt() {
-  appState.prompt = '';
+  const promptInput = document.getElementById('promptInput');
+  if (promptInput) {
+    promptInput.value = '';
+  }
+  
+  appState.currentAgent = null;
   appState.selectedTemplate = null;
-  document.getElementById('promptInput').value = '';
+  
   document.querySelectorAll('.template-card').forEach(card => {
     card.classList.remove('active');
   });
+  
   updateCharCount();
   generatePreview();
-  autoSaveState();
 }
 
-function handleFrameworkChange(e) {
+async function handleFrameworkChange(e) {
   const framework = e.target.id.toUpperCase();
+  if (!appState.currentAgent) return;
+  
+  // Update framework configuration based on checkbox state
+  const frameworkConfigs = appState.currentAgent.frameworkConfigs;
   
   if (e.target.checked) {
-    appState.selectedFrameworks.add(framework);
+    // Add framework with default configuration
+    const { FrameworkConfig } = await import('./domain/value_objects/FrameworkConfig.js');
+    
+    const defaultConfigs = {
+      'A2A': { 
+        name: appState.currentAgent.name.value || 'Generated Agent',
+        discovery: 'multicast',
+        port: 8080,
+        security: 'tls',
+        capabilities: ['chat', 'task-execution', 'collaboration']
+      },
+      'ADK': { 
+        workflow: 'sequential',
+        environment: 'local',
+        resources: 'CPU: 1, Memory: 512MB',
+        retry: 'exponential',
+        tools: ['general_tools']
+      },
+      'MCP': { 
+        server: 'stdio',
+        tools: ['filesystem', 'database', 'web'],
+        resources: ['files', 'databases', 'apis'],
+        context_window: 4096
+      }
+    };
+    
+    const frameworkConfig = new FrameworkConfig(framework, defaultConfigs[framework] || {});
+    appState.currentAgent = appState.currentAgent.addFrameworkConfig(frameworkConfig);
   } else {
-    appState.selectedFrameworks.delete(framework);
+    // Remove framework
+    appState.currentAgent = appState.currentAgent.removeFrameworkConfig(framework);
   }
   
   updateFrameworkCards();
   updateConfiguration();
   generatePreview();
-  autoSaveState();
 }
 
 function updateFrameworkCards() {
   document.querySelectorAll('.framework-card').forEach(card => {
     const framework = card.dataset.framework;
-    if (appState.selectedFrameworks.has(framework)) {
+    const isSelected = appState.currentAgent?.hasFramework(framework) || false;
+    
+    if (isSelected) {
       card.classList.add('selected');
     } else {
       card.classList.remove('selected');
@@ -430,41 +400,27 @@ function updateFrameworkCards() {
 
 function updateConfiguration() {
   const configContent = document.getElementById('configContent');
+  if (!configContent) return;
 
-  // Remove configuration sections for frameworks that are no longer selected
-  const existingConfigs = configContent.querySelectorAll('.config-section');
-  existingConfigs.forEach(config => {
-    const framework = config.dataset.framework;
-    if (!appState.selectedFrameworks.has(framework)) {
-      config.remove();
-    }
-  });
-
-  // Add configuration sections for newly selected frameworks
-  appState.selectedFrameworks.forEach(framework => {
-    if (!configContent.querySelector(`[data-framework="${framework}"]`)) {
-      const configSection = document.createElement('div');
-      configSection.dataset.framework = framework;
-      configSection.innerHTML = generateFrameworkConfig(framework);
-      configContent.appendChild(configSection);
-    }
-  });
-
-  // Show/hide placeholder
-  const placeholder = configContent.querySelector('.config-placeholder');
-  if (appState.selectedFrameworks.size === 0) {
-    if (!placeholder) {
-      configContent.innerHTML = `
-        <div class="config-placeholder">
-          <p>Select one or more frameworks above to configure your agent.</p>
-        </div>
-      `;
-    }
-  } else {
-    if (placeholder) {
-      placeholder.remove();
-    }
+  if (!appState.currentAgent || appState.currentAgent.frameworkConfigs.length === 0) {
+    configContent.innerHTML = `
+      <div class="config-placeholder">
+        <p>Select one or more frameworks above to configure your agent.</p>
+      </div>
+    `;
+    return;
   }
+
+  // Clear existing config sections
+  configContent.innerHTML = '';
+
+  // Add configuration sections for each selected framework
+  appState.currentAgent.frameworkConfigs.forEach(frameworkConfig => {
+    const configSection = document.createElement('div');
+    configSection.dataset.framework = frameworkConfig.frameworkType;
+    configSection.innerHTML = generateFrameworkConfig(frameworkConfig.frameworkType, frameworkConfig.configData);
+    configContent.appendChild(configSection);
+  });
 
   // Add event listeners to new config inputs
   const newInputs = configContent.querySelectorAll('.config-input:not([data-has-listener])');
@@ -474,33 +430,43 @@ function updateConfiguration() {
   });
 }
 
-function generateFrameworkConfig(framework) {
+function generateFrameworkConfig(framework, configData = {}) {
+  // Default config values
+  const defaults = {
+    'A2A': { name: 'My Agent', discovery: 'multicast', port: 8080, security: 'tls' },
+    'ADK': { workflow: 'sequential', environment: 'local', resources: 'CPU: 1, Memory: 512MB', retry: 'exponential' },
+    'MCP': { server: 'stdio', tools: ['filesystem', 'database', 'web'], resources: ['files', 'databases', 'apis'], context_window: 4096 }
+  };
+  
+  const defaultConfig = defaults[framework] || {};
+  const finalConfig = { ...defaultConfig, ...configData };
+  
   const configs = {
     'A2A': `
       <div class="config-section">
         <h3 class="config-section__title">A2A Protocol Configuration</h3>
         <div class="config-group">
           <label class="config-label">Agent Name</label>
-          <input type="text" class="config-input" data-config="a2a.name" placeholder="My Agent">
+          <input type="text" class="config-input" data-config="a2a.name" placeholder="My Agent" value="${finalConfig.name || ''}">
         </div>
         <div class="config-group">
           <label class="config-label">Discovery Protocol</label>
           <select class="config-input" data-config="a2a.discovery">
-            <option value="multicast">Multicast Discovery</option>
-            <option value="registry">Registry-based</option>
-            <option value="static">Static Configuration</option>
+            <option value="multicast" ${finalConfig.discovery === 'multicast' ? 'selected' : ''}>Multicast Discovery</option>
+            <option value="registry" ${finalConfig.discovery === 'registry' ? 'selected' : ''}>Registry-based</option>
+            <option value="static" ${finalConfig.discovery === 'static' ? 'selected' : ''}>Static Configuration</option>
           </select>
         </div>
         <div class="config-group">
           <label class="config-label">Communication Port</label>
-          <input type="number" class="config-input" data-config="a2a.port" placeholder="8080" value="8080">
+          <input type="number" class="config-input" data-config="a2a.port" placeholder="8080" value="${finalConfig.port || 8080}">
         </div>
         <div class="config-group">
           <label class="config-label">Security Mode</label>
           <select class="config-input" data-config="a2a.security">
-            <option value="tls">TLS Encryption</option>
-            <option value="mutual">Mutual Authentication</option>
-            <option value="none">None (Development Only)</option>
+            <option value="tls" ${finalConfig.security === 'tls' ? 'selected' : ''}>TLS Encryption</option>
+            <option value="mutual" ${finalConfig.security === 'mutual' ? 'selected' : ''}>Mutual Authentication</option>
+            <option value="none" ${finalConfig.security === 'none' ? 'selected' : ''}>None (Development Only)</option>
           </select>
         </div>
       </div>
@@ -511,32 +477,32 @@ function generateFrameworkConfig(framework) {
         <div class="config-group">
           <label class="config-label">Workflow Type</label>
           <select class="config-input" data-config="adk.workflow">
-            <option value="sequential">Sequential</option>
-            <option value="parallel">Parallel</option>
-            <option value="conditional">Conditional</option>
-            <option value="event-driven">Event-driven</option>
+            <option value="sequential" ${finalConfig.workflow === 'sequential' ? 'selected' : ''}>Sequential</option>
+            <option value="parallel" ${finalConfig.workflow === 'parallel' ? 'selected' : ''}>Parallel</option>
+            <option value="conditional" ${finalConfig.workflow === 'conditional' ? 'selected' : ''}>Conditional</option>
+            <option value="event-driven" ${finalConfig.workflow === 'event-driven' ? 'selected' : ''}>Event-driven</option>
           </select>
         </div>
         <div class="config-group">
           <label class="config-label">Execution Environment</label>
           <select class="config-input" data-config="adk.environment">
-            <option value="local">Local Process</option>
-            <option value="container">Container</option>
-            <option value="serverless">Serverless Function</option>
-            <option value="distributed">Distributed System</option>
+            <option value="local" ${finalConfig.environment === 'local' ? 'selected' : ''}>Local Process</option>
+            <option value="container" ${finalConfig.environment === 'container' ? 'selected' : ''}>Container</option>
+            <option value="serverless" ${finalConfig.environment === 'serverless' ? 'selected' : ''}>Serverless Function</option>
+            <option value="distributed" ${finalConfig.environment === 'distributed' ? 'selected' : ''}>Distributed System</option>
           </select>
         </div>
         <div class="config-group">
           <label class="config-label">Resource Limits</label>
-          <input type="text" class="config-input" data-config="adk.resources" placeholder="CPU: 1, Memory: 512MB">
+          <input type="text" class="config-input" data-config="adk.resources" placeholder="CPU: 1, Memory: 512MB" value="${finalConfig.resources || 'CPU: 1, Memory: 512MB'}">
         </div>
         <div class="config-group">
           <label class="config-label">Retry Policy</label>
           <select class="config-input" data-config="adk.retry">
-            <option value="exponential">Exponential Backoff</option>
-            <option value="linear">Linear Backoff</option>
-            <option value="immediate">Immediate Retry</option>
-            <option value="none">No Retry</option>
+            <option value="exponential" ${finalConfig.retry === 'exponential' ? 'selected' : ''}>Exponential Backoff</option>
+            <option value="linear" ${finalConfig.retry === 'linear' ? 'selected' : ''}>Linear Backoff</option>
+            <option value="immediate" ${finalConfig.retry === 'immediate' ? 'selected' : ''}>Immediate Retry</option>
+            <option value="none" ${finalConfig.retry === 'none' ? 'selected' : ''}>No Retry</option>
           </select>
         </div>
       </div>
@@ -547,23 +513,23 @@ function generateFrameworkConfig(framework) {
         <div class="config-group">
           <label class="config-label">Server Implementation</label>
           <select class="config-input" data-config="mcp.server">
-            <option value="stdio">Standard I/O</option>
-            <option value="websocket">WebSocket</option>
-            <option value="http">HTTP REST</option>
-            <option value="grpc">gRPC</option>
+            <option value="stdio" ${finalConfig.server === 'stdio' ? 'selected' : ''}>Standard I/O</option>
+            <option value="websocket" ${finalConfig.server === 'websocket' ? 'selected' : ''}>WebSocket</option>
+            <option value="http" ${finalConfig.server === 'http' ? 'selected' : ''}>HTTP REST</option>
+            <option value="grpc" ${finalConfig.server === 'grpc' ? 'selected' : ''}>gRPC</option>
           </select>
         </div>
         <div class="config-group">
           <label class="config-label">Tool Categories</label>
-          <input type="text" class="config-input" data-config="mcp.tools" placeholder="filesystem, database, web">
+          <input type="text" class="config-input" data-config="mcp.tools" placeholder="filesystem, database, web" value="${Array.isArray(finalConfig.tools) ? finalConfig.tools.join(', ') : 'filesystem, database, web'}">
         </div>
         <div class="config-group">
           <label class="config-label">Resource Types</label>
-          <input type="text" class="config-input" data-config="mcp.resources" placeholder="files, databases, apis">
+          <input type="text" class="config-input" data-config="mcp.resources" placeholder="files, databases, apis" value="${Array.isArray(finalConfig.resources) ? finalConfig.resources.join(', ') : 'files, databases, apis'}">
         </div>
         <div class="config-group">
           <label class="config-label">Context Window</label>
-          <input type="number" class="config-input" data-config="mcp.context" placeholder="4096" value="4096">
+          <input type="number" class="config-input" data-config="mcp.context" placeholder="4096" value="${finalConfig.context_window || 4096}">
         </div>
       </div>
     `
@@ -572,30 +538,47 @@ function generateFrameworkConfig(framework) {
   return configs[framework] || '';
 }
 
-function handleConfigChange(e) {
+async async function handleConfigChange(e) {
   const configPath = e.target.dataset.config;
   const value = e.target.value;
   
-  // Store configuration in nested object
-  const pathParts = configPath.split('.');
-  let current = appState.configuration;
+  if (!appState.currentAgent) return;
   
-  for (let i = 0; i < pathParts.length - 1; i++) {
-    if (!current[pathParts[i]]) {
-      current[pathParts[i]] = {};
-    }
-    current = current[pathParts[i]];
+  // Parse the config path (e.g. "a2a.name")
+  const pathParts = configPath.split('.');
+  if (pathParts.length < 2) return;
+  
+  const frameworkType = pathParts[0].toUpperCase();
+  const configKey = pathParts[1];
+  
+  // Get existing config for this framework and update the specific value
+  let frameworkConfig = appState.currentAgent.getFrameworkConfig(frameworkType);
+  let configData = frameworkConfig ? frameworkConfig.configData : {};
+  
+  // Handle special cases for different data types
+  let processedValue = value;
+  if (configKey === 'port' || configKey === 'context' || configKey === 'context_window') {
+    processedValue = parseInt(value) || 0;
+  } else if (configKey === 'tools' || configKey === 'resources') {
+    processedValue = value.split(',').map(item => item.trim()).filter(item => item);
   }
   
-  current[pathParts[pathParts.length - 1]] = value;
+  // Update the config data
+  configData = { ...configData, [configKey]: processedValue };
+  
+  // Create new FrameworkConfig and update agent
+  const { FrameworkConfig } = await import('./domain/value_objects/FrameworkConfig.js');
+  const updatedFrameworkConfig = new FrameworkConfig(frameworkType, configData);
+  appState.currentAgent = appState.currentAgent.addFrameworkConfig(updatedFrameworkConfig);
+  
   generatePreview();
-  autoSaveState();
 }
 
 function generatePreview() {
   const codePreview = document.getElementById('codePreview');
+  if (!codePreview) return;
   
-  if (!appState.prompt || appState.selectedFrameworks.size === 0) {
+  if (!appState.currentAgent || appState.currentAgent.frameworkConfigs.length === 0) {
     codePreview.innerHTML = `
       <div class="preview-placeholder">
         <p>Your agent configuration will appear here once you provide a prompt and select frameworks.</p>
@@ -604,77 +587,8 @@ function generatePreview() {
     return;
   }
   
-  const config = generateAgentConfig();
+  const config = appState.currentAgent.generateConfiguration();
   codePreview.innerHTML = `<pre><code>${JSON.stringify(config, null, 2)}</code></pre>`;
-}
-
-function generateAgentConfig() {
-  const config = {
-    agent: {
-      name: appState.configuration.a2a?.name || "Generated Agent",
-      description: appState.prompt.substring(0, 200) + (appState.prompt.length > 200 ? '...' : ''),
-      prompt: appState.prompt,
-      frameworks: Array.from(appState.selectedFrameworks),
-      created: new Date().toISOString()
-    }
-  };
-  
-  // Add framework-specific configurations
-  if (appState.selectedFrameworks.has('A2A')) {
-    config.a2a = {
-      name: appState.configuration.a2a?.name || "Generated Agent",
-      discovery: appState.configuration.a2a?.discovery || "multicast",
-      port: parseInt(appState.configuration.a2a?.port) || 8080,
-      security: appState.configuration.a2a?.security || "tls",
-      capabilities: ["chat", "task-execution", "collaboration"]
-    };
-  }
-  
-  if (appState.selectedFrameworks.has('ADK')) {
-    config.adk = {
-      workflow: appState.configuration.adk?.workflow || "sequential",
-      environment: appState.configuration.adk?.environment || "local",
-      resources: appState.configuration.adk?.resources || "CPU: 1, Memory: 512MB",
-      retry: appState.configuration.adk?.retry || "exponential",
-      tools: getRecommendedTools()
-    };
-  }
-  
-  if (appState.selectedFrameworks.has('MCP')) {
-    config.mcp = {
-      server: appState.configuration.mcp?.server || "stdio",
-      tools: (appState.configuration.mcp?.tools || "filesystem, database, web").split(',').map(t => t.trim()),
-      resources: (appState.configuration.mcp?.resources || "files, databases, apis").split(',').map(r => r.trim()),
-      context_window: parseInt(appState.configuration.mcp?.context) || 4096
-    };
-  }
-  
-  return config;
-}
-
-function getRecommendedTools() {
-  if (appState.selectedTemplate) {
-    return appState.selectedTemplate.tools;
-  }
-  
-  // Analyze prompt for tool recommendations
-  const prompt = appState.prompt.toLowerCase();
-  const tools = [];
-  
-  if (prompt.includes('data') || prompt.includes('analysis')) {
-    tools.push('data_processor', 'visualization');
-  }
-  if (prompt.includes('file') || prompt.includes('document')) {
-    tools.push('file_handler', 'document_parser');
-  }
-  if (prompt.includes('web') || prompt.includes('api')) {
-    tools.push('web_client', 'api_connector');
-  }
-  if (prompt.includes('database') || prompt.includes('storage')) {
-    tools.push('database_connector', 'data_storage');
-  }
-  
-  return tools.length > 0 ? tools : ['general_tools'];
 }
 
 function switchTab(e) {
@@ -703,7 +617,7 @@ function sendTestMessage() {
   
   if (!message) return;
   
-  if (!appState.prompt || appState.selectedFrameworks.size === 0) {
+  if (!appState.currentAgent || appState.currentAgent.frameworkConfigs.length === 0) {
     addTestMessage('system', 'Please configure your agent first by providing a prompt and selecting frameworks.');
     return;
   }
@@ -778,7 +692,7 @@ function generateTestResponse(userMessage) {
   }
   
   if (!response) {
-    const frameworks = Array.from(appState.selectedFrameworks);
+    const frameworks = appState.currentAgent ? appState.currentAgent.frameworkConfigs.map(config => config.frameworkType) : [];
     const responses = [
       `I understand your request. Using ${frameworks.join(' and ')} frameworks, I can help you with that.`, 
       "That's an interesting question. Let me process that using my configured tools and capabilities.",
@@ -973,17 +887,11 @@ function confirmModalAction() {
   showNotification(`${appState.currentDeploymentType} deployment configuration saved successfully!`, 'success');
   
   closeModal();
-  autoSaveState();
 }
 
-function generateAgent() {
-  if (!appState.prompt.trim()) {
-    showNotification('Please provide a prompt for your agent.', 'error');
-    return;
-  }
-  
-  if (appState.selectedFrameworks.size === 0) {
-    showNotification('Please select at least one framework (A2A, ADK, or MCP).', 'error');
+async function generateAgent() {
+  if (!appState.currentAgent || !appState.currentAgent.prompt.value || appState.currentAgent.frameworkConfigs.length === 0) {
+    showNotification('Please provide a prompt for your agent and select at least one framework.', 'error');
     return;
   }
   
@@ -993,9 +901,23 @@ function generateAgent() {
   btn.innerHTML = '<span class="spinner"></span> Generating...';
   btn.disabled = true;
   
-  // Simulate generation process
-  setTimeout(() => {
-    appState.generatedAgent = generateAgentConfig();
+  // Use the application use case to create the agent
+  const createAgentUseCase = container.getCreateAgentUseCase();
+  
+  const request = {
+    name: appState.currentAgent.name.value,
+    prompt: appState.currentAgent.prompt.value,
+    frameworkConfigs: appState.currentAgent.frameworkConfigs.map(config => ({
+      frameworkType: config.frameworkType,
+      configData: config.configData
+    }))
+  };
+  
+  const result = await createAgentUseCase.execute(request);
+  
+  if (result.success) {
+    // Update current agent with the one created by the use case
+    appState.currentAgent = result.agent;
     
     // Reset button
     btn.textContent = originalText;
@@ -1008,22 +930,29 @@ function generateAgent() {
     
     // Add initial system message to test interface
     const testMessages = document.getElementById('testMessages');
-    testMessages.innerHTML = `
-      <div class="test-message system">
-        <p>Agent configured and ready for testing! Your agent supports: ${Array.from(appState.selectedFrameworks).join(', ')}</p>
-      </div>
-    `;
-    autoSaveState();
-  }, 2000);
+    if (testMessages) {
+      testMessages.innerHTML = `
+        <div class="test-message system">
+          <p>Agent configured and ready for testing! Your agent supports: ${appState.currentAgent.frameworkConfigs.map(config => config.frameworkType).join(', ')}</p>
+        </div>
+      `;
+    }
+  } else {
+    // Reset button
+    btn.textContent = originalText;
+    btn.disabled = false;
+    
+    showNotification('Error generating agent: ' + result.errors.join(', '), 'error');
+  }
 }
 
 function exportConfiguration() {
-  if (!appState.generatedAgent && (!appState.prompt || appState.selectedFrameworks.size === 0)) {
+  if (!appState.currentAgent) {
     showNotification('Nothing to export. Please configure and generate an agent first.', 'warning');
     return;
   }
   
-  const config = appState.generatedAgent || generateAgentConfig();
+  const config = appState.currentAgent.generateConfiguration();
   const dataStr = JSON.stringify(config, null, 2);
   const dataBlob = new Blob([dataStr], {type: 'application/json'});
   
@@ -1059,4 +988,389 @@ function showNotification(message, type) {
       document.body.removeChild(notification);
     }
   }, 4000);
+}
+
+// New functions for orchestration capabilities
+
+/**
+ * Plans agent actions based on a goal
+ */
+async function planAgent() {
+  if (!appState.currentAgent) {
+    showNotification('Please configure an agent first.', 'error');
+    return;
+  }
+  
+  // Get goal from user input or use agent's prompt
+  const goalInput = prompt('Enter the goal for your agent:', appState.currentAgent.prompt.value);
+  if (!goalInput) {
+    showNotification('Goal is required to create a plan.', 'error');
+    return;
+  }
+  
+  // Show loading state
+  const btn = document.getElementById('planAgent') || document.getElementById('generateAgent');
+  if (btn) {
+    const originalText = btn.textContent;
+    btn.innerHTML = '<span class="spinner"></span> Planning...';
+    btn.disabled = true;
+  }
+  
+  try {
+    // Use the orchestration use case to create a plan
+    const createAgenticPlanUseCase = container.getCreateAgenticPlanUseCase();
+    
+    const request = {
+      goal: goalInput,
+      agentId: appState.currentAgent.id?.value || null,
+      availableTools: appState.currentAgent.frameworkConfigs.flatMap(config => config.configData.tools || [])
+    };
+    
+    const result = await createAgenticPlanUseCase.execute(request);
+    
+    if (result.success) {
+      showNotification('Agentic plan created successfully!', 'success');
+      
+      // Display plan in a special UI section
+      displayAgenticPlan(result.plan);
+    } else {
+      showNotification('Error creating plan: ' + result.errors.join(', '), 'error');
+    }
+  } catch (error) {
+    showNotification('Error creating plan: ' + error.message, 'error');
+  } finally {
+    // Reset button
+    const btn = document.getElementById('planAgent') || document.getElementById('generateAgent');
+    if (btn) {
+      btn.textContent = btn.id === 'planAgent' ? 'Plan Agent' : 'Generate Agent';
+      btn.disabled = false;
+    }
+  }
+}
+
+/**
+ * Displays the agentic plan in the UI
+ */
+function displayAgenticPlan(plan) {
+  const codePreview = document.getElementById('codePreview');
+  if (!codePreview) return;
+  
+  const planHtml = `
+    <div class="agentic-plan">
+      <h3>Agentic Plan for: ${plan.goal}</h3>
+      <div class="plan-overview">
+        <p><strong>Framework:</strong> ${plan.frameworkType}</p>
+        <p><strong>Estimated Time:</strong> ~${plan.estimatedTime} minutes</p>
+        <p><strong>Required Tools:</strong> ${plan.requiredTools.join(', ')}</p>
+      </div>
+      <h4>Plan Steps:</h4>
+      <ol class="plan-steps">
+        ${plan.steps.map(step => `
+          <li>
+            <strong>${step.action}:</strong> ${step.description}
+            ${step.dependencies.length > 0 ? `<br><small>Depends on: ${step.dependencies.join(', ')}</small>` : ''}
+          </li>
+        `).join('')}
+      </ol>
+      <h4>Success Criteria:</h4>
+      <ul class="success-criteria">
+        ${plan.successCriteria.map(criterion => `<li>${criterion}</li>`).join('')}
+      </ul>
+    </div>
+  `;
+  
+  codePreview.innerHTML = planHtml;
+}
+
+/**
+ * Evaluates the current agent for a specific goal
+ */
+async function evaluateAgentForGoal() {
+  if (!appState.currentAgent) {
+    showNotification('Please configure an agent first.', 'error');
+    return;
+  }
+  
+  // Get goal from user input or use agent's prompt
+  const goalInput = prompt('Enter the goal to evaluate your agent against:', appState.currentAgent.prompt.value);
+  if (!goalInput) {
+    showNotification('Goal is required to perform evaluation.', 'error');
+    return;
+  }
+  
+  const evaluateAgentUseCase = container.getEvaluateAgentForGoalUseCase();
+  
+  const request = {
+    agentId: appState.currentAgent.id?.value,
+    goal: goalInput
+  };
+  
+  const result = await evaluateAgentUseCase.execute(request);
+  
+  if (result.success) {
+    showNotification(`Agent evaluation completed with score: ${result.evaluation.score}/100`, 'success');
+    displayAgentEvaluation(result.evaluation);
+  } else {
+    showNotification('Error evaluating agent: ' + result.errors.join(', '), 'error');
+  }
+}
+
+/**
+ * Displays agent evaluation results in the UI
+ */
+function displayAgentEvaluation(evaluation) {
+  const codePreview = document.getElementById('codePreview');
+  if (!codePreview) return;
+  
+  const evaluationHtml = `
+    <div class="agent-evaluation">
+      <h3>Evaluation for: ${evaluation.goal}</h3>
+      <div class="evaluation-score">
+        <p><strong>Score:</strong> <span class="score-value">${evaluation.score}/100</span></p>
+      </div>
+      <h4>Feedback:</h4>
+      <ul class="evaluation-feedback">
+        ${evaluation.feedback.map(item => `<li>${item}</li>`).join('')}
+      </ul>
+      <h4>Recommendations:</h4>
+      <ul class="evaluation-recommendations">
+        ${evaluation.recommendations.map(item => `<li>${item}</li>`).join('')}
+      </ul>
+    </div>
+  `;
+  
+  codePreview.innerHTML = evaluationHtml;
+}
+
+/**
+ * Configures multi-agent coordination
+ */
+async function configureMultiAgentCoordination() {
+  if (!appState.currentAgent) {
+    showNotification('Please configure an agent first.', 'error');
+    return;
+  }
+  
+  // Get coordination goal from user input
+  const goalInput = prompt('Enter the coordination goal for multiple agents:', 'Coordinate multiple agents for complex tasks');
+  if (!goalInput) {
+    showNotification('Coordination goal is required.', 'error');
+    return;
+  }
+  
+  // For now, we'll just use the current agent, but in a real implementation
+  // we would have multiple agents to coordinate
+  const agentIds = [appState.currentAgent.id.value]; // This would be multiple agent IDs in a real scenario
+  
+  // In a real implementation, we'd have a list of agents available for coordination
+  // For now, we'll just use the current agent and add some mock agents
+  const mockAgentIds = [appState.currentAgent.id.value];
+  
+  // Show loading state
+  const btns = document.querySelectorAll('.capability-card button');
+  let coordBtn;
+  btns.forEach(btn => {
+    if (btn.textContent.trim() === 'Configure' && btn.closest('.capability-card').querySelector('h4').textContent.trim() === 'Multi-Agent Coordination') {
+      coordBtn = btn;
+    }
+  });
+  
+  if (coordBtn) {
+    const originalText = coordBtn.textContent;
+    coordBtn.innerHTML = '<span class="spinner"></span> Coordinating...';
+    coordBtn.disabled = true;
+  }
+  
+  try {
+    // Use the multi-agent coordination use case
+    const createMultiAgentCoordinationUseCase = container.getCreateMultiAgentCoordinationUseCase();
+    
+    const request = {
+      agentIds: mockAgentIds,
+      coordinationGoal: goalInput
+    };
+    
+    const result = await createMultiAgentCoordinationUseCase.execute(request);
+    
+    if (result.success) {
+      showNotification('Multi-agent coordination plan created!', 'success');
+      displayMultiAgentCoordinationPlan(result.coordinationPlan);
+    } else {
+      showNotification('Error creating coordination plan: ' + result.errors.join(', '), 'error');
+    }
+  } catch (error) {
+    showNotification('Error creating coordination plan: ' + error.message, 'error');
+  } finally {
+    // Reset button
+    if (coordBtn) {
+      coordBtn.textContent = 'Configure';
+      coordBtn.disabled = false;
+    }
+  }
+}
+
+/**
+ * Displays multi-agent coordination plan in the UI
+ */
+function displayMultiAgentCoordinationPlan(coordinationPlan) {
+  const codePreview = document.getElementById('codePreview');
+  if (!codePreview) return;
+  
+  const planHtml = `
+    <div class="multi-agent-plan">
+      <h3>Multi-Agent Coordination Plan</h3>
+      <p><strong>Goal:</strong> ${coordinationPlan.goal}</p>
+      <p><strong>Communication Protocol:</strong> ${coordinationPlan.communicationProtocol}</p>
+      
+      <h4>Coordinated Agents:</h4>
+      <ul class="coordinated-agents">
+        ${coordinationPlan.agents.map(agent => `
+          <li>
+            <strong>${agent.name}</strong> (${agent.id}) - Role: ${agent.role}
+            <ul>
+              ${coordinationPlan.taskDistribution
+                .find(d => d.agentId === agent.id)
+                ?.tasks.map(task => `<li>${task}</li>`).join('') || '<li>No specific tasks assigned</li>'}
+            </ul>
+          </li>
+        `).join('')}
+      </ul>
+      
+      <h4>Coordination Steps:</h4>
+      <ol class="coordination-steps">
+        ${coordinationPlan.coordinationSteps.map(step => `
+          <li><strong>${step.action}:</strong> ${step.description}</li>
+        `).join('')}
+      </ol>
+    </div>
+  `;
+  
+  codePreview.innerHTML = planHtml;
+}
+
+/**
+ * Configures AP2 payment integration
+ */
+async function configureAP2Payment() {
+  if (!appState.currentAgent) {
+    showNotification('Please configure an agent first.', 'error');
+    return;
+  }
+  
+  // Check if agent has payment capabilities
+  const ap2Service = container.getAP2DomainService();
+  const hasPaymentCapabilities = ap2Service.hasPaymentCapabilities(appState.currentAgent);
+  
+  if (!hasPaymentCapabilities) {
+    showNotification('This agent does not have payment processing capabilities. Add MCP framework with payment tools.', 'warning');
+    return;
+  }
+  
+  // Get payment details from user
+  const amountInput = prompt('Enter payment amount:', '10.00');
+  if (!amountInput) {
+    showNotification('Amount is required for payment.', 'error');
+    return;
+  }
+  
+  const recipientInput = prompt('Enter payment recipient:', 'Merchant');
+  if (!recipientInput) {
+    showNotification('Recipient is required for payment.', 'error');
+    return;
+  }
+  
+  const descriptionInput = prompt('Enter payment description:', `Payment via ${appState.currentAgent.name.value}`);
+  
+  // Show loading state
+  const btns = document.querySelectorAll('.capability-card button');
+  let ap2Btn;
+  btns.forEach(btn => {
+    if (btn.textContent.trim() === 'Configure' && btn.closest('.capability-card').querySelector('h4').textContent.trim() === 'AP2 Payment Integration') {
+      ap2Btn = btn;
+    }
+  });
+  
+  if (ap2Btn) {
+    const originalText = ap2Btn.textContent;
+    ap2Btn.innerHTML = '<span class="spinner"></span> Processing...';
+    ap2Btn.disabled = true;
+  }
+  
+  try {
+    // Use the AP2 payment use case
+    const processAgentPaymentUseCase = container.getProcessAgentPaymentUseCase();
+    
+    const request = {
+      agentId: appState.currentAgent.id.value,
+      paymentDetails: {
+        amount: parseFloat(amountInput),
+        currency: 'USD',
+        methodType: 'DIGITAL_WALLET',
+        methodDetails: { walletId: 'user-wallet-123' },
+        description: descriptionInput,
+        recipient: recipientInput
+      }
+    };
+    
+    const result = await processAgentPaymentUseCase.execute(request);
+    
+    if (result.success) {
+      showNotification('AP2 payment configured and processed successfully!', 'success');
+      displayAP2PaymentResult(result);
+    } else {
+      showNotification('Error processing payment: ' + result.errors.join(', '), 'error');
+    }
+  } catch (error) {
+    showNotification('Error processing payment: ' + error.message, 'error');
+  } finally {
+    // Reset button
+    if (ap2Btn) {
+      ap2Btn.textContent = 'Configure';
+      ap2Btn.disabled = false;
+    }
+  }
+}
+
+/**
+ * Displays AP2 payment result in the UI
+ */
+function displayAP2PaymentResult(result) {
+  const codePreview = document.getElementById('codePreview');
+  if (!codePreview) return;
+  
+  const payment = result.payment;
+  const processingPlan = result.processingPlan;
+  
+  const paymentHtml = `
+    <div class="ap2-payment-result">
+      <h3>AP2 Payment Result</h3>
+      <div class="payment-summary">
+        <p><strong>Amount:</strong> ${payment.amount.amount} ${payment.amount.currency}</p>
+        <p><strong>Recipient:</strong> ${payment.recipient}</p>
+        <p><strong>Description:</strong> ${payment.description}</p>
+        <p><strong>Status:</strong> <span class="status-badge">${payment.status.value}</span></p>
+        <p><strong>Processing Result:</strong> ${result.processingResult?.message || 'Payment processed'}</p>
+      </div>
+      
+      ${processingPlan ? `
+      <h4>Processing Plan:</h4>
+      <ul class="payment-steps">
+        ${processingPlan.steps.map(step => `
+          <li><strong>${step.action}:</strong> ${step.description}</li>
+        `).join('')}
+      </ul>
+      <p><strong>Estimated Time:</strong> ~${processingPlan.estimatedTime} minutes</p>
+      ` : ''}
+      
+      <h4>Security Configuration:</h4>
+      <ul class="security-features">
+        <li><strong>Encryption:</strong> ${result.processingPlan?.security?.encryption || 'AES-256'}</li>
+        <li><strong>Authentication:</strong> ${result.processingPlan?.security?.authentication || 'token-based'}</li>
+        <li><strong>Audit Logging:</strong> ${result.processingPlan?.security?.audit_logging ? 'Enabled' : 'Disabled'}</li>
+        <li><strong>Fraud Detection:</strong> ${result.processingPlan?.security?.fraud_detection ? 'Enabled' : 'Disabled'}</li>
+      </ul>
+    </div>
+  `;
+  
+  codePreview.innerHTML = paymentHtml;
 }
