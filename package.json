@@ -1,26 +1,37 @@
-
 {
-  "name": "ai-agent-builder",
-  "version": "1.0.0",
-  "description": "AI Agent Builder Application",
+  "name": "temp_vite",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "start": "live-server --port=3000 --host=localhost",
-    "build": "npm run minify-css && npm run minify-js",
-    "minify-css": "csso assets/css/style.css --output dist/style.min.css",
-    "minify-js": "terser assets/js/app.js --output dist/app.min.js --compress --mangle",
-    "serve": "http-server dist -p 8080",
-    "lint": "eslint assets/js/app.js",
-    "format": "prettier --write assets/js/app.js",
-    "start:dist": "live-server dist",
-    "test": "live-server --port=3001 --host=localhost --open=/test.html",
-    "test:manual": "echo 'Open http://localhost:3000 and run: new UABTestRunner().runTests()' && npm start"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.23.25",
+    "lucide-react": "^0.556.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
-    "live-server": "^1.2.2",
-    "http-server": "^14.1.1",
-    "csso-cli": "^4.0.1",
-    "terser": "^5.19.2",
-    "eslint": "^8.45.0",
-    "prettier": "^3.0.0"
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "autoprefixer": "^10.4.22",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.15",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.2.4"
   }
 }

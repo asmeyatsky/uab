@@ -1,0 +1,28 @@
+{
+  "name": "ai-agent-builder",
+  "version": "1.0.0",
+  "description": "AI Agent Builder Application",
+  "scripts": {
+    "start": "live-server --port=3000 --host=localhost",
+    "build": "npm run minify-css && npm run minify-js",
+    "minify-css": "csso assets/css/style.css --output dist/style.min.css",
+    "minify-js": "terser assets/js/app.js --output dist/app.min.js --compress --mangle",
+    "serve": "http-server dist -p 8080",
+    "lint": "eslint assets/js/app.js",
+    "format": "prettier --write assets/js/app.js",
+    "start:dist": "live-server dist",
+    "test": "live-server --port=3001 --host=localhost --open=/test.html",
+    "test:manual": "echo 'Open http://localhost:3000 and run: new UABTestRunner().runTests()' && npm start"
+  },
+  "devDependencies": {
+    "csso-cli": "^4.0.1",
+    "eslint": "^8.45.0",
+    "http-server": "^14.1.1",
+    "live-server": "^1.2.2",
+    "prettier": "^3.0.0",
+    "terser": "^5.19.2"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.1"
+  }
+}

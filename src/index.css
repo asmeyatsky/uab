@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-gray-100 font-sans antialiased;
+    overflow-x: hidden;
+  }
+  
+  /* Glassmorphism utilities */
+  .glass-panel {
+    @apply bg-surface backdrop-blur-md border border-white/10 shadow-xl;
+  }
+  
+  .glass-input {
+    @apply bg-surface backdrop-blur-sm border border-white/10 focus:border-primary/50 outline-none transition-all;
+  }
+}
