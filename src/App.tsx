@@ -1,33 +1,28 @@
-import { useState } from 'react';
-import { Sidebar } from './components/layout/Sidebar';
-import { MarketplacePage } from './pages/MarketplacePage';
-import { DashboardPage } from './pages/DashboardPage';
-import { AgentBuilderPage } from './pages/AgentBuilderPage';
+import { useAppStore } from './presentation/store/app-store.ts';
+import { ContainerProvider } from './presentation/store/container.tsx';
+import { AppShell } from './presentation/components/layout/AppShell.tsx';
+import { MarketplacePage } from './presentation/pages/MarketplacePage.tsx';
+import { AgentBuilderPage } from './presentation/pages/AgentBuilderPage.tsx';
+import { DashboardPage } from './presentation/pages/DashboardPage.tsx';
+import { ProtocolExplorerPage } from './presentation/pages/ProtocolExplorerPage.tsx';
 
-function App() {
-  const [currentView, setCurrentView] = useState('marketplace');
-
-  const renderContent = () => {
-    switch (currentView) {
-      case 'marketplace':
-        return <MarketplacePage />;
-      case 'builder':
-        return <AgentBuilderPage />;
-      case 'dashboard':
-        return <DashboardPage />;
-      default:
-        return <MarketplacePage />;
-    }
-  };
+function AppContent() {
+  const currentView = useAppStore(s => s.currentView);
 
   return (
-    <div className="min-h-screen bg-background text-white">
-      <Sidebar currentView={currentView} onChangeView={setCurrentView} />
-      <main className="pl-64 min-h-screen">
-        {renderContent()}
-      </main>
-    </div>
+    <AppShell>
+      {currentView === 'marketplace' && <MarketplacePage />}
+      {currentView === 'builder' && <AgentBuilderPage />}
+      {currentView === 'dashboard' && <DashboardPage />}
+      {currentView === 'explorer' && <ProtocolExplorerPage />}
+    </AppShell>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <ContainerProvider>
+      <AppContent />
+    </ContainerProvider>
+  );
+}
